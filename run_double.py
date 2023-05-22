@@ -9,7 +9,7 @@ import torchvision.datasets as datasets
 from PIL import Image
 
 from utils.ImageFromFolderDouble import ImageFromFolderDouble
-from models.model import STBVMM
+from models.modeldoubleheight import STBVMM
 
 
 def main(args):
@@ -48,11 +48,12 @@ def main(args):
     save_dir = args.save_dir
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-    print(f"Save directory: {save_dir}")
+    print(save_dir)
 
     # Data loader
-    dataset = ImageFromFolderDouble(args.image_path, mode=args.mode, num_data=args.num_data, preprocessing=False)
-    data_loader = data.DataLoader(dataset,
+    dataset_mag = ImageFromFolderDouble(
+        args.image_path, mag=args.mag, mode=args.mode, num_data=args.num_data, transform=None)
+    data_loader = data.DataLoader(dataset_mag,
                                   batch_size=args.batch_size,
                                   shuffle=False,
                                   num_workers=args.workers,
@@ -61,61 +62,39 @@ def main(args):
     # Generate frames
     model.eval()
 
-    # Magnification
     for i, (xa, xb, mag_factor) in enumerate(data_loader):
-        if i % args.print_freq == 0:
-            print('Processing sample: %d' % i)
-
-        mag_factor = mag_factor.unsqueeze(1).unsqueeze(1).unsqueeze(1)
-
         xa = xa.to(device)
         xb = xb.to(device)
-        mag_factor = mag_factor.to(device)
 
-        y_hat, _, _, _ = model(xa, xb, mag_factor)
+        # forward
+        with torch.no_grad():
+            out_a, out_b = model(xa, xb)
 
-        if i == 0:
-            # Back to image scale (0-255)
-            tmp = xa.permute(0, 2, 3, 1).cpu().detach().numpy()
-            tmp = np.clip(tmp, -1.0, 1.0)
-            tmp = ((tmp + 1.0) * 127.5).astype(np.uint8)
+        out_a = out_a.cpu().numpy()
+        out_b = out_b.cpu().numpy()
 
-            # Save first frame
-            fn = os.path.join(save_dir, 'STBVMM_%s_%06d.png' % (args.mode, i))
-            im = Image.fromarray(np.concatenate(tmp, 0))
-            im.save(fn)
+        # save output images
+        for j in range(out_a.shape[0]):
+            output_a = Image.fromarray(np.uint8(out_a[j] * 255.0))
+            output_a.save(os.path.join(save_dir, f'output_a_{i * args.batch_size + j}.png'))
 
-        # Back to image scale (0-255)
-        y_hat = y_hat.permute(0, 2, 3, 1).cpu().detach().numpy()
-        y_hat = np.clip(y_hat, -1.0, 1.0)
-        y_hat = ((y_hat + 1.0) * 127.5).astype(np.uint8)
+            output_b = Image.fromarray(np.uint8(out_b[j] * 255.0))
+            output_b.save(os.path.join(save_dir, f'output_b_{i * args.batch_size + j}.png'))
 
-        # Save frames
-        fn = os.path.join(save_dir, 'STBVMM_%s_%06d.png' % (args.mode, i + 1))
-        im = Image.fromarray(np.concatenate(y_hat, 0))
-        im.save(fn)
-
-    print("Processing complete.")
+    print("Finished processing all images.")
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Swin Transformer Based Video Motion Magnification')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--load_ckpt', default='ckpt/ckpt_e09.pth.tar', type=str)
+    parser.add_argument('--save_dir', default='output/', type=str)
+    parser.add_argument('--image_path', default='input/', type=str)
+    parser.add_argument('--mag', default=20, type=int)
+    parser.add_argument('--mode', default='static', type=str)
+    parser.add_argument('--num_data', default=100, type=int)
+    parser.add_argument('--batch_size', default=1, type=int)
+    parser.add_argument('--workers', default=4, type=int)
+    parser.add_argument('--device', default='auto', type=str)
+    args = parser.parse_args()
 
-    # Application parameters
-    parser.add_argument('--load_ckpt', type=str, metavar='PATH', required=True,
-                        help='path to load checkpoint')
-    parser.add_argument('--save_dir', default='demo', type=str, metavar='PATH',
-                        help='path to save generated frames (default: demo)')
-    parser.add_argument('--image_path', type=str, metavar='PATH', required=True,
-                        help='path to input image')
-    parser.add_argument('--num_data', type=int, metavar='N', default=1,
-                        help='number of frames')
-    parser.add_argument('--mode', default='static', type=str, choices=['static', 'dynamic'],
-                        help='magnification mode (static, dynamic)')
-    parser.add_argument('--mag', metavar='N', default=20.0, type=float,
-                        help='magnification factor (default: 20.0)')
-
-    # Execute parameters
-    parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
-                        help='number of data loading workers (default: 4)')
-    parser.add_argument
+    main(args)
