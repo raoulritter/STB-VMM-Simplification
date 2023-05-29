@@ -8,7 +8,7 @@ import torch.utils.data as data
 import torchvision.datasets as datasets
 from PIL import Image
 
-from utils.data_loader import ImageFromFolderTest
+from utils.data_loader_torchscript import ImageFromFolderTest
 from models.model import STBVMM
 
 
