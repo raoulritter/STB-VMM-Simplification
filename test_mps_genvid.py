@@ -4,7 +4,6 @@ from torchvision import transforms
 import os
 import time
 import subprocess
-import sys
 
 def main():
     # Load the TorchScript model
@@ -14,10 +13,10 @@ def main():
     model = model.to('mps')
 
     # Directory path of input frames
-    frames_dir = os.path.join('Original', sys.argv[1])
+    frames_dir = 'Original/Car_00_split'
 
     # Output directory path to save generated frames
-    output_dir = os.path.join('output_frames', sys.argv[1] + '_amplified')
+    output_dir = 'amplified_Car_00'
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
@@ -37,7 +36,41 @@ def main():
         frame_a_path = os.path.join(frames_dir, frame_files[i])
         frame_b_path = os.path.join(frames_dir, frame_files[i + 1])
 
-        # [...]
+        image_a = Image.open(frame_a_path)
+        image_b = Image.open(frame_b_path)
+
+        # Resize the images
+        image_a = image_a.resize(desired_size)
+        image_b = image_b.resize(desired_size)
+
+        # Convert the images to tensors
+        transform = transforms.ToTensor()
+        tensor_a = transform(image_a)
+        tensor_b = transform(image_b)
+
+        # Move the tensors to the GPU (Metal)
+        tensor_a = tensor_a.to('mps')
+        tensor_b = tensor_b.to('mps')
+
+        # Run inference
+        output_tuple = model(tensor_a.unsqueeze(0), tensor_b.unsqueeze(0))
+        output = output_tuple[0]  # Access the desired tensor from the tuple
+
+        # Rescale the output tensor to the range [0, 1]
+        output = (output - output.min()) / (output.max() - output.min())
+
+        # Squeeze the tensor to remove the extra dimensions
+        output = output.squeeze()
+
+        # Convert the output tensor to a PIL image
+        output_image = transforms.ToPILImage()(output.cpu())
+
+        # Save the output image
+        output_path = os.path.join(output_dir, f'output_{i + 1:03d}.png')
+        output_image.save(output_path)
+
+        if (i + 1) % 10 == 0:
+            print(f'Processed {i + 1} frames out of {num_frames - 1}')
 
     end_time_frames = time.time()
     frames_time = end_time_frames - start_time_frames
@@ -54,13 +87,10 @@ def main():
     total_time = frames_time + video_time
     print(f'Video created. Time taken: {video_time:.2f} seconds')
     print(f'Total time elapsed: {total_time:.2f} seconds')
-
-    # Save the timing information to a text file
     with open(os.path.join(output_dir, 'timing_info.txt'), 'w') as f:
         f.write(f'Processing frames completed. Time taken: {frames_time:.2f} seconds\n')
         f.write(f'Video created. Time taken: {video_time:.2f} seconds\n')
         f.write(f'Total time elapsed: {total_time:.2f} seconds\n')
-
 
 if __name__ == '__main__':
     main()

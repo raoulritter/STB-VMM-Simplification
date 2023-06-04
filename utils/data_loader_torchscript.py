@@ -1,7 +1,8 @@
 from torchvision.datasets.folder import *
 import numpy as np
 import torch
-from torchvision import transforms
+from torchvision.transforms import Resize
+
 from PIL import Image
 import os
 
@@ -68,18 +69,17 @@ def preproc_poisson_noise(image):
 
 
 class ImageFromFolderTest(ImageFolder):
-    def __init__(self, root, mag=10.0, mode='static', num_data=300, preprocessing=False, transform=None,
-                 target_transform=None, loader=default_loader):
-        if mode == 'static':
-            imgs = [(root + '_%06d.png' % (1),
-                     root + '_%06d.png' % (i + 2),
+    def __init__(self, root, mag=10.0, mode='static', num_data=300, preprocessing=False, transform=None, target_transform=None, loader=default_loader):
+        if mode=='static':
+            imgs = [(root+'_%06d.png'%(1),
+                     root+'_%06d.png'%(i+2),
                      mag) for i in range(num_data)]
-        elif mode == 'dynamic':
-            imgs = [(root + '_%06d.png' % (i + 1),
-                     root + '_%06d.png' % (i + 2),
+        elif mode=='dynamic':
+            imgs = [(root+'_%06d.png'%(i+1),
+                     root+'_%06d.png'%(i+2),
                      mag) for i in range(num_data)]
         else:
-            raise ValueError("Unsupported modes %s" % (mode))
+            raise ValueError("Unsupported modes %s"%(mode))
 
         self.root = root
         self.imgs = imgs
@@ -88,42 +88,40 @@ class ImageFromFolderTest(ImageFolder):
         self.target_transform = target_transform
         self.loader = loader
         self.preproc = preprocessing
+        self.desired_size = (364, 364)  # define the desired size
 
     def __getitem__(self, index):
         pathA, pathB, target = self.samples[index]
         sampleA, sampleB = self.loader(pathA), self.loader(pathB)
 
+        # resize the images
+        resize_transform = Resize(self.desired_size)
+        sampleA = resize_transform(sampleA)
+        sampleB = resize_transform(sampleB)
+
         # normalize
-        sampleA = sampleA / 127.5 - 1.0
-        sampleB = sampleB / 127.5 - 1.0
+        sampleA = sampleA/127.5 - 1.0
+        sampleB = sampleB/127.5 - 1.0
 
         # preprocessing
         if self.preproc:
             sampleA = preproc_poisson_noise(sampleA)
             sampleB = preproc_poisson_noise(sampleB)
 
-        if self.transform is not None:
-            sampleA = self.transform(Image.fromarray(sampleA))
-            sampleB = self.transform(Image.fromarray(sampleB))
+        # to torch tensor
+        tensor_transform = ToTensor()
+        sampleA = tensor_transform(sampleA)
+        sampleB = tensor_transform(sampleB)
 
-        sampleA, sampleB = torch.from_numpy(np.array(sampleA)), torch.from_numpy(np.array(sampleB))
-        sampleA = sampleA.float()
-        sampleB = sampleB.float()
-
-        target = torch.from_numpy(np.array(target)).float()
+        target = torch.tensor(target).float()
 
         return sampleA, sampleB, target
 
-
 # Test
 if __name__ == '__main__':
-    transform = transforms.Resize((384, 384))
-
-    dataset = ImageFromFolder('./../data/train', num_data=100, preprocessing=True, transform=transform)
-
-    imageAmp, imageA, imageB, imageC, mag = dataset.__getitem__(0)
+    dataset = ImageFromFolderTest('./../data/train', num_data=100, preprocessing=True)
+    imageA, imageB, mag = dataset.__getitem__(0)
 
     import matplotlib.pyplot as plt
-
-    plt.imshow(((imageA + 1.0) * 127.5).astype(np.uint8))
+    plt.imshow(imageA.permute(1, 2, 0).numpy())
     plt.show()

@@ -1,105 +1,106 @@
 import argparse
-import os
-
-import numpy as np
 import torch
-import torch.utils.data as data
 from PIL import Image
-
-from utils.data_loader import ImageFromFolderTest
+from torchvision import transforms
+import os
+import time
+import subprocess
 
 def main(args):
-    # Device choice (auto)
+    # Load the TorchScript model
+    model = torch.jit.load('20x/modelpnnx20x.pt')
+
+    # Move the model to the device
     if args.device == 'auto':
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     else:
         device = args.device
-
     print(f'Using device: {device}')
 
-    # Load TorchScript model
-    model = torch.jit.load(args.load_ckpt).to(device)
-    print("=> loaded TorchScript model '{}'".format(args.load_ckpt))
 
-    # Check saving directory
-    save_dir = args.save_dir
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-    print(save_dir)
+    # Directory path of input frames
+    frames_dir = args.frames_dir
 
-    # Data loader
-    dataset_mag = ImageFromFolderTest(
-        args.video_path, mode=args.mode, num_data=args.num_data, preprocessing=False)
-    data_loader = data.DataLoader(dataset_mag,
-                                  batch_size=args.batch_size,
-                                  shuffle=False,
-                                  num_workers=args.workers,
-                                  pin_memory=False)
+    # Output directory path to save generated frames
+    output_dir = 'output_frames'
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
-    # Generate frames
-    model.eval()
+    # Resize the images if necessary
+    desired_size = (384, 384)
 
-    # Modify your loop over the data_loader like this:
-    for i, (xa, xb, _) in enumerate(data_loader):
-        if i % args.print_freq == 0:
-            print('processing sample: %d' % i)
+    # Get the list of frames in the directory
+    frame_files = sorted(os.listdir(frames_dir))
 
-        xa = xa.to(device)
-        xb = xb.to(device)
+    # Count the number of frames
+    num_frames = len(frame_files)
 
-        # Since the model expects a tuple, we pass the inputs as a tuple
-        y_hat, _, _, _ = model(xa, xb)
-        if i == 0:
-            # Back to image scale (0-255)
-            tmp = xa.permute(0, 2, 3, 1).cpu().detach().numpy()
-            tmp = np.clip(tmp, -1.0, 1.0)
-            tmp = ((tmp + 1.0) * 127.5).astype(np.uint8)
+    # Process the frames and generate output images
+    start_time_frames = time.time()
+    for i in range(num_frames - 1):
+        # Load the frames
+        frame_a_path = os.path.join(frames_dir, frame_files[i])
+        frame_b_path = os.path.join(frames_dir, frame_files[i + 1])
 
-            # Save first frame
-            fn = os.path.join(save_dir, 'STBVMM_%s_%06d.png' % (args.mode, i))
-            im = Image.fromarray(np.concatenate(tmp, 0))
-            im.save(fn)
+        image_a = Image.open(frame_a_path)
+        image_b = Image.open(frame_b_path)
 
-        # back to image scale (0-255)
-        y_hat = y_hat.permute(0, 2, 3, 1).cpu().detach().numpy()
-        y_hat = np.clip(y_hat, -1.0, 1.0)
-        y_hat = ((y_hat + 1.0) * 127.5).astype(np.uint8)
+        # Resize the images
+        image_a = image_a.resize(desired_size)
+        image_b = image_b.resize(desired_size)
 
-        # Save frames
-        fn = os.path.join(save_dir, 'STBVMM_%s_%06d.png' % (args.mode, i+1))
-        im = Image.fromarray(np.concatenate(y_hat, 0))
-        im.save(fn)
+        # Convert the images to tensors
+        transform = transforms.ToTensor()
+        tensor_a = transform(image_a)
+        tensor_b = transform(image_b)
+
+        # Move the tensors to the device
+        tensor_a = tensor_a.to(device)
+        tensor_b = tensor_b.to(device)
+
+        # Run inference
+        output_tuple = model(tensor_a.unsqueeze(0), tensor_b.unsqueeze(0))
+        output = output_tuple[0]  # Access the desired tensor from the tuple
+
+        # Rescale the output tensor to the range [0, 1]
+        output = (output - output.min()) / (output.max() - output.min())
+
+        # Squeeze the tensor to remove the extra dimensions
+        output = output.squeeze()
+
+        # Convert the output tensor to a PIL image
+        output_image = transforms.ToPILImage()(output.cpu())
+
+        # Save the output image
+        output_path = os.path.join(output_dir, f'output_{i + 1:03d}.png')
+        output_image.save(output_path)
+
+        if (i + 1) % 10 == 0:
+            print(f'Processed {i + 1} frames out of {num_frames - 1}')
+
+    end_time_frames = time.time()
+    frames_time = end_time_frames - start_time_frames
+    print(f'Processing frames completed. Time taken: {frames_time:.2f} seconds')
+
+    # Use ffmpeg to create a 30 fps video
+    start_time_video = time.time()
+    output_video_path = os.path.join(output_dir, 'output_video.mp4')
+    subprocess.call(['ffmpeg', '-framerate', '30', '-i', os.path.join(output_dir, 'output_%03d.png'),
+                     '-c:v', 'libx264', '-r', '30', '-pix_fmt', 'yuv420p', output_video_path])
+
+    end_time_video = time.time()
+    video_time = end_time_video - start_time_video
+    total_time = frames_time + video_time
+    print(f'Video created. Time taken: {video_time:.2f} seconds')
+    print(f'Total time elapsed: {total_time:.2f} seconds')
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description='Swin Transformer Based Video Motion Magnification')
-
-    # Application parameters
-    parser.add_argument('-i', '--video_path', type=str, metavar='PATH', required=True,
-                        help='path to video input frames')
-    parser.add_argument('-c', '--load_ckpt', type=str, metavar='PATH', required=True,
-                        help='path to load checkpoint')
-    parser.add_argument('-o', '--save_dir', default='demo', type=str, metavar='PATH',
-                        help='path to save generated frames (default: demo)')
-    parser.add_argument('--mode', default='static', type=str, choices=['static', 'dynamic'],
-                        help='magnification mode (static, dynamic)')
-    parser.add_argument('-n', '--num_data', type=int, metavar='N', required=True,
-                        help='number of frames')
-
-    # Execute parameters
-    parser.add_argument('-j', '--workers', default=16, type=int, metavar='N',
-                        help='number of data loading workers (default: 16)')
-    parser.add_argument('-b', '--batch_size', default=1, type=int,
-                        metavar='N', help='batch size (default: 1)')
-    parser.add_argument('-p', '--print_freq', default=100, type=int,
-                        metavar='N', help='print frequency (default: 100)')
-
-    # Device
-    parser.add_argument('--device', type=str, default='auto',
-                        choices=['auto', 'cpu', 'cuda'],
-                        help='select device [auto/cpu/cuda] (default: auto)')
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--frames_dir', type=str, required=True, help='Path to the input frames directory')
+    parser.add_argument('--device', type=str, default='auto', 
+                        choices=['auto', 'cpu', 'cuda', 'mps', 'xla', 'tpu', 'vulkan'],
+                        help='select device [auto/cpu/cuda/mps/xla/tpu/vulkan] (default: auto)')
     args = parser.parse_args()
 
     main(args)
